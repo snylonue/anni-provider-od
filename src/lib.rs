@@ -15,11 +15,28 @@ pub struct OneDriveProvider {
     albums: DashMap<String, (String, usize)>, // album_id => (path (without prefix '/'), size)
 }
 
-fn format_path(base: &str, album_id: &str, disc_id: NonZeroU8, track_id: NonZeroU8) -> String {
+fn format_audio_path(
+    base: &str,
+    album_id: &str,
+    disc_id: NonZeroU8,
+    track_id: NonZeroU8,
+) -> String {
     if base.is_empty() {
         format!("/{album_id}/{disc_id}/{track_id}.flac")
     } else {
         format!("/{base}/{album_id}/{disc_id}/{track_id}.flac")
+    }
+}
+
+fn format_cover_path(base: &str, album_id: &str, disc_id: Option<NonZeroU8>) -> String {
+    let path = match disc_id {
+        Some(id) => format!("/{album_id}/{id}/cover.jpg"),
+        None => format!("/{album_id}/cover.jpg"),
+    };
+    if base.is_empty() {
+        path
+    } else {
+        format!("/{base}{path}")
     }
 }
 
@@ -69,7 +86,7 @@ impl OneDriveProvider {
         track_id: NonZeroU8,
     ) -> Result<(String, usize), Error> {
         let (path, size) = match self.albums.get(album_id) {
-            Some(p) => (format_path(&p.0, album_id, disc_id, track_id), p.1),
+            Some(p) => (format_audio_path(&p.0, album_id, disc_id, track_id), p.1),
             None => return Err(ProviderError::FileNotFound.into()),
         };
         Ok((self.file_url(&path).await?, size))
@@ -128,7 +145,16 @@ impl AnniProvider for OneDriveProvider {
         album_id: &str,
         disc_id: Option<NonZeroU8>,
     ) -> anni_provider::Result<ResourceReader> {
-        todo!()
+        let path = match self.albums.get(album_id) {
+            Some(p) => format_cover_path(&p.0, album_id, disc_id),
+            None => return Err(ProviderError::FileNotFound),
+        };
+        let url = self.file_url(&path).await?;
+        let resp = self.drive.client().get(url).send().await?;
+        let reader = StreamReader::new(resp.bytes_stream().map(|result| {
+            result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        }));
+        Ok(Box::pin(reader))
     }
 
     /// Reloads the provider for new albums
