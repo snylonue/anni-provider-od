@@ -24,11 +24,16 @@ fn format_path(base: &str, album_id: &str, disc_id: NonZeroU8, track_id: NonZero
 }
 
 impl OneDriveProvider {
-    pub fn new(drive: OneDrive) -> Self {
+    pub fn with_drive(drive: OneDrive) -> Self {
         Self {
             drive,
             albums: DashMap::new(),
         }
+    }
+    pub async fn new(drive: OneDrive) -> Result<Self, Error> {
+        let mut p = Self::with_drive(drive);
+        p.reload_albums().await?;
+        Ok(p)
     }
     pub async fn reload_albums(&mut self) -> Result<(), Error> {
         let items = self.drive.list_children(ItemLocation::root()).await?;
