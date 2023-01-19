@@ -73,7 +73,7 @@ impl OneDriveProvider {
                 _ => None,
             })
             .collect();
-        self.albums = dbg!(albums);
+        self.albums = albums;
         Ok(())
     }
     pub async fn file_url(&self, path: &str) -> Result<String, Error> {
