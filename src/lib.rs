@@ -1,8 +1,9 @@
 pub mod info;
 
-use anni_provider::{
-    AnniProvider, AudioInfo, AudioResourceReader, ProviderError, Range, ResourceReader,
-};
+pub use anni_provider::{AnniProvider, ProviderError};
+pub use onedrive_api;
+
+use anni_provider::{AudioInfo, AudioResourceReader, Range, ResourceReader};
 use dashmap::DashMap;
 use onedrive_api::{ItemLocation, OneDrive};
 use reqwest::header::{CONTENT_RANGE, RANGE};
