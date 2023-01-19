@@ -8,8 +8,8 @@ edition = "2021"
 [dependencies]
 onedrive-api = "0.9"
 dashmap = "5"
-anni-provider = { git = "https://github.com/snylonue/anni.git", package = "anni-provider", branch = "provider-feature", default-features = false, features = ["reqwest"] }
-anni-flac = { git = "https://github.com/snylonue/anni.git", package = "anni-flac", branch = "provider-feature", features = ["async"]}
+anni-provider = { git = "https://github.com/ProjectAnni/anni.git", package = "anni-provider", default-features = false, features = ["reqwest"] }
+anni-flac = { git = "https://github.com/ProjectAnni/anni.git", package = "anni-flac", features = ["async"]}
 async-trait = "0.1"
 reqwest = "0.11"
 tokio-util = { version = "0.7", features = ["io"] }
