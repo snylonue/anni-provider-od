@@ -17,18 +17,22 @@ use std::{
     num::NonZeroU8,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 
+pub struct ClientInfo {
+    pub refresh_token: String,
+    pub client_secret: String,
+    pub expire: Duration,
+    pub location: DriveLocation,
+}
+
 pub struct OneDriveClient {
-    drive: OneDrive,
+    drive: RwLock<OneDrive>,
     auth: Auth,
-    refresh_token: String,
-    client_secret: String,
-    expire: Duration,
+    client_info: RwLock<ClientInfo>,
     client: Client,
-    location: DriveLocation,
 }
 
 impl OneDriveClient {
@@ -60,13 +64,15 @@ impl OneDriveClient {
         let drive = OneDrive::new_with_client(client.clone(), access_token, location.clone());
 
         Ok(Self {
-            drive,
+            drive: RwLock::new(drive),
             auth,
-            refresh_token,
-            client_secret,
-            expire,
+            client_info: RwLock::new(ClientInfo {
+                refresh_token,
+                client_secret,
+                expire,
+                location,
+            }),
             client,
-            location,
         })
     }
 
@@ -74,11 +80,13 @@ impl OneDriveClient {
         self.client.clone()
     }
 
-    pub async fn refresh_if_expired(&mut self) -> Result<(), onedrive_api::Error> {
-        if SystemTime::now().duration_since(UNIX_EPOCH).unwrap() > self.expire {
+    pub async fn refresh_if_expired(&self) -> Result<(), onedrive_api::Error> {
+        let info = self.client_info.read().await;
+        if SystemTime::now().duration_since(UNIX_EPOCH).unwrap() > info.expire {
+            let mut info = self.client_info.write().await;
             let token = self
                 .auth
-                .login_with_refresh_token(&self.refresh_token, Some(&self.client_secret))
+                .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
                 .await?;
             let access_token = token.access_token;
             let refresh_token = token.refresh_token.expect("Fail to get refresh token");
@@ -87,11 +95,11 @@ impl OneDriveClient {
                 Duration::from_secs(token.expires_in_secs) + now
             };
             let drive =
-                OneDrive::new_with_client(self.client.clone(), access_token, self.location.clone());
+                OneDrive::new_with_client(self.client.clone(), access_token, info.location.clone());
 
-            self.drive = drive;
-            self.expire = expire;
-            self.refresh_token = refresh_token;
+            *self.drive.write().await = drive;
+            info.expire = expire;
+            info.refresh_token = refresh_token;
         }
 
         Ok(())
@@ -102,20 +110,20 @@ impl OneDriveClient {
         item: ItemLocation<'_>,
     ) -> Result<Vec<DriveItem>, onedrive_api::Error> {
         self.refresh_if_expired().await?;
-        self.drive.list_children(item).await
+        self.drive.read().await.list_children(item).await
     }
 
     pub async fn get_item_download_url(
-        &mut self,
+        &self,
         item: ItemLocation<'_>,
     ) -> Result<String, onedrive_api::Error> {
         self.refresh_if_expired().await?;
-        self.drive.get_item_download_url(item).await
+        self.drive.read().await.get_item_download_url(item).await
     }
 }
 
 pub struct OneDriveProvider {
-    drive: Mutex<OneDriveClient>,
+    drive: OneDriveClient,
     client: Client,
     albums: DashMap<String, (String, usize)>, // album_id => (path (without prefix '/'), size)
 }
@@ -149,7 +157,7 @@ impl OneDriveProvider {
     pub fn with_drive(drive: OneDriveClient) -> Self {
         let client = drive.client();
         Self {
-            drive: Mutex::new(drive),
+            drive,
             client,
             albums: DashMap::new(),
         }
@@ -160,12 +168,7 @@ impl OneDriveProvider {
         Ok(p)
     }
     pub async fn reload_albums(&mut self) -> Result<(), Error> {
-        let items = self
-            .drive
-            .lock()
-            .await
-            .list_children(ItemLocation::root())
-            .await?;
+        let items = self.drive.list_children(ItemLocation::root()).await?;
         let albums = items
             .into_iter()
             .filter_map(|item| match item.name.clone() {
@@ -189,8 +192,7 @@ impl OneDriveProvider {
     }
     pub async fn file_url(&self, path: &str) -> Result<String, Error> {
         let location = ItemLocation::from_path(path).ok_or(ProviderError::InvalidPath)?;
-        let mut guard = self.drive.lock().await;
-        Ok(guard.get_item_download_url(dbg!(location)).await?)
+        Ok(self.drive.get_item_download_url(location).await?)
     }
     pub async fn audio_url(
         &self,
