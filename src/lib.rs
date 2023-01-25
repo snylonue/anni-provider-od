@@ -5,14 +5,118 @@ pub use onedrive_api;
 
 use anni_provider::{AudioInfo, AudioResourceReader, Range, ResourceReader};
 use dashmap::DashMap;
-use onedrive_api::{ItemLocation, OneDrive};
-use reqwest::header::{CONTENT_RANGE, RANGE};
-use std::{borrow::Cow, collections::HashSet, num::NonZeroU8};
+use onedrive_api::{resource::DriveItem, Auth, DriveLocation, ItemLocation, OneDrive, Permission};
+use reqwest::{
+    header::{CONTENT_RANGE, RANGE},
+    redirect::Policy,
+    Client, ClientBuilder,
+};
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    num::NonZeroU8,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 
-pub struct OneDriveProvider {
+pub struct OneDriveClient {
     drive: OneDrive,
+    auth: Auth,
+    refresh_token: String,
+    client_secret: String,
+    expire: Duration,
+    client: Client,
+    location: DriveLocation,
+}
+
+impl OneDriveClient {
+    pub async fn new(
+        refresh_token: String,
+        client_id: String,
+        client_secret: String,
+        location: DriveLocation,
+    ) -> Result<Self, Error> {
+        let client = ClientBuilder::new()
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let auth = Auth::new_with_client(
+            client.clone(),
+            &client_id,
+            Permission::new_read().offline_access(true),
+            "",
+        );
+        let token = auth
+            .login_with_refresh_token(&refresh_token, Some(&client_secret))
+            .await?;
+        let access_token = token.access_token;
+        let refresh_token = token.refresh_token.expect("Fail to get refresh token");
+        let expire = {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            Duration::from_secs(token.expires_in_secs) + now
+        };
+        let drive = OneDrive::new_with_client(client.clone(), access_token, location.clone());
+
+        Ok(Self {
+            drive,
+            auth,
+            refresh_token,
+            client_secret,
+            expire,
+            client,
+            location,
+        })
+    }
+
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
+
+    pub async fn refresh_if_expired(&mut self) -> Result<(), onedrive_api::Error> {
+        if SystemTime::now().duration_since(UNIX_EPOCH).unwrap() > self.expire {
+            let token = self
+                .auth
+                .login_with_refresh_token(&self.refresh_token, Some(&self.client_secret))
+                .await?;
+            let access_token = token.access_token;
+            let refresh_token = token.refresh_token.expect("Fail to get refresh token");
+            let expire = {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+                Duration::from_secs(token.expires_in_secs) + now
+            };
+            let drive =
+                OneDrive::new_with_client(self.client.clone(), access_token, self.location.clone());
+
+            self.drive = drive;
+            self.expire = expire;
+            self.refresh_token = refresh_token;
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_children(
+        &mut self,
+        item: ItemLocation<'_>,
+    ) -> Result<Vec<DriveItem>, onedrive_api::Error> {
+        self.refresh_if_expired().await?;
+        self.drive.list_children(item).await
+    }
+
+    pub async fn get_item_download_url(
+        &mut self,
+        item: ItemLocation<'_>,
+    ) -> Result<String, onedrive_api::Error> {
+        self.refresh_if_expired().await?;
+        self.drive.get_item_download_url(item).await
+    }
+}
+
+pub struct OneDriveProvider {
+    drive: Mutex<OneDriveClient>,
+    client: Client,
     albums: DashMap<String, (String, usize)>, // album_id => (path (without prefix '/'), size)
 }
 
@@ -42,19 +146,26 @@ fn format_cover_path(base: &str, album_id: &str, disc_id: Option<NonZeroU8>) -> 
 }
 
 impl OneDriveProvider {
-    pub fn with_drive(drive: OneDrive) -> Self {
+    pub fn with_drive(drive: OneDriveClient) -> Self {
+        let client = drive.client();
         Self {
-            drive,
+            drive: Mutex::new(drive),
+            client,
             albums: DashMap::new(),
         }
     }
-    pub async fn new(drive: OneDrive) -> Result<Self, Error> {
+    pub async fn new(drive: OneDriveClient) -> Result<Self, Error> {
         let mut p = Self::with_drive(drive);
         p.reload_albums().await?;
         Ok(p)
     }
     pub async fn reload_albums(&mut self) -> Result<(), Error> {
-        let items = self.drive.list_children(ItemLocation::root()).await?;
+        let items = self
+            .drive
+            .lock()
+            .await
+            .list_children(ItemLocation::root())
+            .await?;
         let albums = items
             .into_iter()
             .filter_map(|item| match item.name.clone() {
@@ -78,7 +189,8 @@ impl OneDriveProvider {
     }
     pub async fn file_url(&self, path: &str) -> Result<String, Error> {
         let location = ItemLocation::from_path(path).ok_or(ProviderError::InvalidPath)?;
-        Ok(self.drive.get_item_download_url(location).await?)
+        let mut guard = self.drive.lock().await;
+        Ok(guard.get_item_download_url(dbg!(location)).await?)
     }
     pub async fn audio_url(
         &self,
@@ -112,7 +224,7 @@ impl AnniProvider for OneDriveProvider {
         range: Range,
     ) -> anni_provider::Result<AudioResourceReader> {
         let (url, size) = self.audio_url(album_id, disc_id, track_id).await?;
-        let req = self.drive.client().get(url);
+        let req = self.client.get(url);
         let req = match range.to_range_header() {
             Some(h) => req.header(RANGE, h),
             None => req,
@@ -149,7 +261,7 @@ impl AnniProvider for OneDriveProvider {
             None => return Err(ProviderError::FileNotFound),
         };
         let url = self.file_url(&path).await?;
-        let resp = self.drive.client().get(url).send().await?;
+        let resp = self.client.get(url).send().await?;
         let reader = StreamReader::new(resp.bytes_stream().map(|result| {
             result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
         }));
