@@ -83,7 +83,6 @@ impl OneDriveClient {
     pub async fn refresh_if_expired(&self) -> Result<(), onedrive_api::Error> {
         let info = self.client_info.read().await;
         if SystemTime::now().duration_since(UNIX_EPOCH).unwrap() > info.expire {
-            let mut info = self.client_info.write().await;
             let token = self
                 .auth
                 .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
@@ -94,10 +93,12 @@ impl OneDriveClient {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
                 Duration::from_secs(token.expires_in_secs) + now
             };
+
             let drive =
                 OneDrive::new_with_client(self.client.clone(), access_token, info.location.clone());
-
             *self.drive.write().await = drive;
+
+            let mut info = self.client_info.write().await;
             info.expire = expire;
             info.refresh_token = refresh_token;
         }
