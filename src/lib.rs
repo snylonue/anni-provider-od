@@ -107,7 +107,7 @@ impl OneDriveClient {
     }
 
     pub async fn list_children(
-        &mut self,
+        &self,
         item: ItemLocation<'_>,
     ) -> Result<Vec<DriveItem>, onedrive_api::Error> {
         self.refresh_if_expired().await?;
@@ -121,12 +121,20 @@ impl OneDriveClient {
         self.refresh_if_expired().await?;
         self.drive.read().await.get_item_download_url(item).await
     }
+
+    pub async fn get_item(
+        &self,
+        item: ItemLocation<'_>,
+    ) -> Result<DriveItem, onedrive_api::Error> {
+        self.refresh_if_expired().await?;
+        self.drive.read().await.get_item(item).await
+    }
 }
 
 pub struct OneDriveProvider {
     drive: OneDriveClient,
     client: Client,
-    albums: DashMap<String, (String, usize)>, // album_id => (path (without prefix '/'), size)
+    albums: DashMap<String, String>, // album_id => (path (without prefix '/'), size)
 }
 
 fn format_audio_path(
@@ -175,15 +183,12 @@ impl OneDriveProvider {
             .filter_map(|item| match item.name.clone() {
                 Some(name) if name.len() == 36 => Some((
                     name,
-                    (
-                        item.parent_reference?["path"]
+                    item.parent_reference?["path"]
                             .as_str()?
                             .split('/')
                             .skip_while(|c| *c != "root:")
                             .skip(1)
-                            .collect(),
-                        item.size.map(|s| s as usize).unwrap_or_default(),
-                    ),
+                            .collect()
                 )),
                 _ => None,
             })
@@ -191,9 +196,12 @@ impl OneDriveProvider {
         self.albums = albums;
         Ok(())
     }
-    pub async fn file_url(&self, path: &str) -> Result<String, Error> {
+    pub async fn file_url(&self, path: &str) -> Result<(String, usize), Error> {
         let location = ItemLocation::from_path(path).ok_or(ProviderError::InvalidPath)?;
-        Ok(self.drive.get_item_download_url(location).await?)
+        let item = self.drive.get_item(location).await?;
+        let download_url = item.download_url.ok_or(ProviderError::FileNotFound)?;
+        let size = item.size.unwrap_or_default();
+        Ok((download_url, size as usize))
     }
     pub async fn audio_url(
         &self,
@@ -201,11 +209,11 @@ impl OneDriveProvider {
         disc_id: NonZeroU8,
         track_id: NonZeroU8,
     ) -> Result<(String, usize), Error> {
-        let (path, size) = match self.albums.get(album_id) {
-            Some(p) => (format_audio_path(&p.0, album_id, disc_id, track_id), p.1),
+        let path = match self.albums.get(album_id) {
+            Some(p) => (format_audio_path(&p, album_id, disc_id, track_id)),
             None => return Err(ProviderError::FileNotFound.into()),
         };
-        Ok((self.file_url(&path).await?, size))
+        self.file_url(&path).await
     }
 }
 
@@ -238,9 +246,7 @@ impl AnniProvider for OneDriveProvider {
                 .get(CONTENT_RANGE)
                 .and_then(|v| v.to_str().ok()),
         );
-        let reader = StreamReader::new(resp.bytes_stream().map(|result| {
-            result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
-        }));
+        let reader = StreamReader::new(resp.bytes_stream().map(to_io_error));
         let (duration, reader) = info::read_duration(Box::pin(reader), range).await?;
         Ok(AudioResourceReader {
             info: AudioInfo {
@@ -260,21 +266,18 @@ impl AnniProvider for OneDriveProvider {
         disc_id: Option<NonZeroU8>,
     ) -> anni_provider::Result<ResourceReader> {
         let path = match self.albums.get(album_id) {
-            Some(p) => format_cover_path(&p.0, album_id, disc_id),
+            Some(p) => format_cover_path(&p, album_id, disc_id),
             None => return Err(ProviderError::FileNotFound),
         };
-        let url = self.file_url(&path).await?;
+        let (url, _) = self.file_url(&path).await?;
         let resp = self.client.get(url).send().await?;
-        let reader = StreamReader::new(resp.bytes_stream().map(|result| {
-            result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
-        }));
+        let reader = StreamReader::new(resp.bytes_stream().map(to_io_error));
         Ok(Box::pin(reader))
     }
 
     /// Reloads the provider for new albums
     async fn reload(&mut self) -> anni_provider::Result<()> {
-        self.reload_albums().await?;
-        Ok(())
+        self.reload_albums().await.map_err(Into::into)
     }
 }
 
@@ -329,4 +332,10 @@ fn content_range_to_range(content_range: Option<&str>) -> Range {
         }
         None => Range::FULL,
     }
+}
+
+fn to_io_error<T, E: Into<Box<dyn std::error::Error + Send + Sync>>>(
+    r: Result<T, E>,
+) -> Result<T, std::io::Error> {
+    r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
