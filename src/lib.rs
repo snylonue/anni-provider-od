@@ -83,6 +83,7 @@ impl OneDriveClient {
     pub async fn refresh_if_expired(&self) -> Result<(), onedrive_api::Error> {
         let info = self.client_info.read().await;
         if SystemTime::now().duration_since(UNIX_EPOCH).unwrap() > info.expire {
+            log::debug!("auth expired, refreshing");
             let token = self
                 .auth
                 .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
@@ -122,10 +123,7 @@ impl OneDriveClient {
         self.drive.read().await.get_item_download_url(item).await
     }
 
-    pub async fn get_item(
-        &self,
-        item: ItemLocation<'_>,
-    ) -> Result<DriveItem, onedrive_api::Error> {
+    pub async fn get_item(&self, item: ItemLocation<'_>) -> Result<DriveItem, onedrive_api::Error> {
         self.refresh_if_expired().await?;
         self.drive.read().await.get_item(item).await
     }
@@ -184,11 +182,11 @@ impl OneDriveProvider {
                 Some(name) if name.len() == 36 => Some((
                     name,
                     item.parent_reference?["path"]
-                            .as_str()?
-                            .split('/')
-                            .skip_while(|c| *c != "root:")
-                            .skip(1)
-                            .collect()
+                        .as_str()?
+                        .split('/')
+                        .skip_while(|c| *c != "root:")
+                        .skip(1)
+                        .collect(),
                 )),
                 _ => None,
             })
@@ -210,7 +208,7 @@ impl OneDriveProvider {
         track_id: NonZeroU8,
     ) -> Result<(String, usize), Error> {
         let path = match self.albums.get(album_id) {
-            Some(p) => (format_audio_path(&p, album_id, disc_id, track_id)),
+            Some(p) => format_audio_path(&p, album_id, disc_id, track_id),
             None => return Err(ProviderError::FileNotFound.into()),
         };
         self.file_url(&path).await
@@ -234,7 +232,13 @@ impl AnniProvider for OneDriveProvider {
         track_id: NonZeroU8,
         range: Range,
     ) -> anni_provider::Result<AudioResourceReader> {
+        log::debug!(
+            "getting audio {album_id}/{disc_id}/{track_id} {}-{:?}",
+            range.start,
+            range.end
+        );
         let (url, size) = self.audio_url(album_id, disc_id, track_id).await?;
+        log::debug!("audio {album_id}/{disc_id}/{track_id} has a size of {size}");
         let req = self.client.get(url);
         let req = match range.to_range_header() {
             Some(h) => req.header(RANGE, h),
