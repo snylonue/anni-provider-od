@@ -15,6 +15,7 @@ use std::{
     borrow::Cow,
     collections::HashSet,
     num::NonZeroU8,
+    sync::atomic::AtomicU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::RwLock;
@@ -24,13 +25,13 @@ use tokio_util::io::StreamReader;
 pub struct ClientInfo {
     pub refresh_token: String,
     pub client_secret: String,
-    pub expire: Duration,
     pub location: DriveLocation,
 }
 
 pub struct OneDriveClient {
     drive: RwLock<OneDrive>,
     auth: Auth,
+    expire: AtomicU64,
     client_info: RwLock<ClientInfo>,
     client: Client,
 }
@@ -60,7 +61,8 @@ impl OneDriveClient {
         let expire = {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
             Duration::from_secs(token.expires_in_secs) + now
-        };
+        }
+        .as_secs();
         let drive = OneDrive::new_with_client(client.clone(), access_token, location.clone());
 
         Ok(Self {
@@ -69,9 +71,9 @@ impl OneDriveClient {
             client_info: RwLock::new(ClientInfo {
                 refresh_token,
                 client_secret,
-                expire,
                 location,
             }),
+            expire: AtomicU64::new(expire),
             client,
         })
     }
@@ -80,10 +82,29 @@ impl OneDriveClient {
         self.client.clone()
     }
 
+    pub fn expire(&self) -> u64 {
+        self.expire.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn set_expire(&self, val: u64) {
+        self.expire.store(val, std::sync::atomic::Ordering::Release)
+    }
+
+    fn is_expired(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        now > self.expire()
+    }
+
     pub async fn refresh_if_expired(&self) -> Result<(), onedrive_api::Error> {
-        let info = self.client_info.read().await;
-        if SystemTime::now().duration_since(UNIX_EPOCH).unwrap() > info.expire {
+        if self.is_expired() {
             log::debug!("auth expired, refreshing");
+            let mut info = self.client_info.write().await;
+            if !self.is_expired() {
+                return Ok(());
+            }
             let token = self
                 .auth
                 .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
@@ -99,8 +120,7 @@ impl OneDriveClient {
                 OneDrive::new_with_client(self.client.clone(), access_token, info.location.clone());
             *self.drive.write().await = drive;
 
-            let mut info = self.client_info.write().await;
-            info.expire = expire;
+            self.set_expire(expire.as_secs());
             info.refresh_token = refresh_token;
         }
 
