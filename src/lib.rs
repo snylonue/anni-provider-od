@@ -4,7 +4,6 @@ pub use anni_provider::{AnniProvider, ProviderError};
 pub use onedrive_api;
 
 use anni_provider::{AudioInfo, AudioResourceReader, Range, ResourceReader};
-use dashmap::DashMap;
 use onedrive_api::{resource::DriveItem, Auth, DriveLocation, ItemLocation, OneDrive, Permission};
 use reqwest::{
     header::{CONTENT_RANGE, RANGE},
@@ -13,7 +12,7 @@ use reqwest::{
 };
 use std::{
     borrow::Cow,
-    collections::HashSet,
+    collections::{HashSet, HashMap},
     num::NonZeroU8,
     sync::atomic::AtomicU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -151,7 +150,7 @@ impl OneDriveClient {
 pub struct OneDriveProvider {
     drive: OneDriveClient,
     client: Client,
-    albums: DashMap<String, String>, // album_id => (path (without prefix '/'), size)
+    albums: HashMap<String, String>, // album_id => (path (without prefix '/'), size)
 }
 
 impl OneDriveProvider {
@@ -160,7 +159,7 @@ impl OneDriveProvider {
         Self {
             drive,
             client,
-            albums: DashMap::new(),
+            albums: HashMap::new(),
         }
     }
     pub async fn new(drive: OneDriveClient) -> Result<Self, Error> {
@@ -214,8 +213,8 @@ impl AnniProvider for OneDriveProvider {
     async fn albums(&self) -> anni_provider::Result<HashSet<Cow<str>>> {
         Ok(self
             .albums
-            .iter()
-            .map(|item| Cow::Owned(item.key().to_owned()))
+            .keys()
+            .map(Into::into)
             .collect())
     }
 
