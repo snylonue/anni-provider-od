@@ -68,11 +68,7 @@ impl OneDriveClient {
             .await?;
         let access_token = token.access_token;
         let refresh_token = token.refresh_token.expect("Fail to get refresh token");
-        let expire = {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-            Duration::from_secs(token.expires_in_secs) + now
-        }
-        .as_secs();
+        let expire = (Duration::from_secs(token.expires_in_secs) + now()).as_secs();
         let drive = OneDrive::new_with_client(client.clone(), access_token, info.location.clone());
 
         Ok(Self {
@@ -100,11 +96,7 @@ impl OneDriveClient {
     }
 
     fn is_expired(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        now > self.expire()
+        now().as_secs() > self.expire()
     }
 
     pub async fn refresh_if_expired(&self) -> Result<(), onedrive_api::Error> {
@@ -120,10 +112,7 @@ impl OneDriveClient {
                 .await?;
             let access_token = token.access_token;
             let refresh_token = token.refresh_token.expect("Fail to get refresh token");
-            let expire = {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                Duration::from_secs(token.expires_in_secs) + now
-            };
+            let expire = Duration::from_secs(token.expires_in_secs) + now();
 
             let drive =
                 OneDrive::new_with_client(self.client.clone(), access_token, info.location.clone());
@@ -163,31 +152,6 @@ pub struct OneDriveProvider {
     drive: OneDriveClient,
     client: Client,
     albums: DashMap<String, String>, // album_id => (path (without prefix '/'), size)
-}
-
-fn format_audio_path(
-    base: &str,
-    album_id: &str,
-    disc_id: NonZeroU8,
-    track_id: NonZeroU8,
-) -> String {
-    if base.is_empty() {
-        format!("/{album_id}/{disc_id}/{track_id}.flac")
-    } else {
-        format!("/{base}/{album_id}/{disc_id}/{track_id}.flac")
-    }
-}
-
-fn format_cover_path(base: &str, album_id: &str, disc_id: Option<NonZeroU8>) -> String {
-    let path = match disc_id {
-        Some(id) => format!("/{album_id}/{id}/cover.jpg"),
-        None => format!("/{album_id}/cover.jpg"),
-    };
-    if base.is_empty() {
-        path
-    } else {
-        format!("/{base}{path}")
-    }
 }
 
 impl OneDriveProvider {
@@ -372,4 +336,33 @@ fn to_io_error<T, E: Into<Box<dyn std::error::Error + Send + Sync>>>(
     r: Result<T, E>,
 ) -> Result<T, std::io::Error> {
     r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+}
+
+fn format_audio_path(
+    base: &str,
+    album_id: &str,
+    disc_id: NonZeroU8,
+    track_id: NonZeroU8,
+) -> String {
+    if base.is_empty() {
+        format!("/{album_id}/{disc_id}/{track_id}.flac")
+    } else {
+        format!("/{base}/{album_id}/{disc_id}/{track_id}.flac")
+    }
+}
+
+fn format_cover_path(base: &str, album_id: &str, disc_id: Option<NonZeroU8>) -> String {
+    let path = match disc_id {
+        Some(id) => format!("/{album_id}/{id}/cover.jpg"),
+        None => format!("/{album_id}/cover.jpg"),
+    };
+    if base.is_empty() {
+        path
+    } else {
+        format!("/{base}{path}")
+    }
+}
+
+fn now() -> Duration {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
 }
