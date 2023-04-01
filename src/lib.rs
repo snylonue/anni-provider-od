@@ -22,12 +22,14 @@ use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 
+#[derive(Debug, Clone)]
 pub struct ClientInfo {
     pub refresh_token: String,
     pub client_secret: String,
     pub location: DriveLocation,
 }
 
+#[derive(Debug)]
 pub struct OneDriveClient {
     drive: RwLock<OneDrive>,
     auth: Auth,
@@ -149,6 +151,7 @@ impl OneDriveClient {
     }
 }
 
+#[derive(Debug)]
 pub struct OneDriveProvider {
     drive: OneDriveClient,
     client: Client,
