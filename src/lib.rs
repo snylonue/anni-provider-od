@@ -29,6 +29,17 @@ pub struct ClientInfo {
     pub location: DriveLocation,
 }
 
+impl ClientInfo {
+    pub fn new(refresh_token: String, client_secret: String, location: DriveLocation) -> Self {
+        Self {
+            refresh_token,
+            client_secret,
+            location,
+        }
+    }
+}
+
+/// A wrapper on [`OneDrive`](onedive_api::OneDrive) that automatically refreshes auth.
 #[derive(Debug)]
 pub struct OneDriveClient {
     drive: RwLock<OneDrive>,
@@ -39,12 +50,9 @@ pub struct OneDriveClient {
 }
 
 impl OneDriveClient {
-    pub async fn new(
-        refresh_token: String,
-        client_id: String,
-        client_secret: String,
-        location: DriveLocation,
-    ) -> Result<Self, Error> {
+    /// Creates a new client.
+    /// To get the required client_id, refresh_token and client_secret, you can take [rclone's doc](https://rclone.org/onedrive/#getting-your-own-client-id-and-key) as a reference.
+    pub async fn new(client_id: String, info: ClientInfo) -> Result<Self, Error> {
         let client = ClientBuilder::new()
             .redirect(Policy::none())
             .build()
@@ -56,7 +64,7 @@ impl OneDriveClient {
             "",
         );
         let token = auth
-            .login_with_refresh_token(&refresh_token, Some(&client_secret))
+            .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
             .await?;
         let access_token = token.access_token;
         let refresh_token = token.refresh_token.expect("Fail to get refresh token");
@@ -65,15 +73,14 @@ impl OneDriveClient {
             Duration::from_secs(token.expires_in_secs) + now
         }
         .as_secs();
-        let drive = OneDrive::new_with_client(client.clone(), access_token, location.clone());
+        let drive = OneDrive::new_with_client(client.clone(), access_token, info.location.clone());
 
         Ok(Self {
             drive: RwLock::new(drive),
             auth,
             client_info: RwLock::new(ClientInfo {
                 refresh_token,
-                client_secret,
-                location,
+                ..info
             }),
             expire: AtomicU64::new(expire),
             client,
