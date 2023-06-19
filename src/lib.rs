@@ -12,7 +12,7 @@ use reqwest::{
 };
 use std::{
     borrow::Cow,
-    collections::{HashSet, HashMap},
+    collections::{HashMap, HashSet},
     num::NonZeroU8,
     sync::atomic::AtomicU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -98,27 +98,37 @@ impl OneDriveClient {
         now().as_secs() > self.expire()
     }
 
+    pub async fn client_info(&self) -> tokio::sync::RwLockReadGuard<'_, ClientInfo> {
+        self.client_info.read().await
+    }
+
+    pub async fn refresh(&self) -> Result<(), onedrive_api::Error> {
+        let mut info = self.client_info.write().await;
+        if !self.is_expired() {
+            return Ok(());
+        }
+        let token = self
+            .auth
+            .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
+            .await?;
+        let access_token = token.access_token;
+        let refresh_token = token.refresh_token.expect("Fail to get refresh token");
+        let expire = Duration::from_secs(token.expires_in_secs) + now();
+
+        let drive =
+            OneDrive::new_with_client(self.client.clone(), access_token, info.location.clone());
+        *self.drive.write().await = drive;
+
+        self.set_expire(expire.as_secs());
+        info.refresh_token = refresh_token;
+
+        Ok(())
+    }
+
     pub async fn refresh_if_expired(&self) -> Result<(), onedrive_api::Error> {
         if self.is_expired() {
             log::debug!("auth expired, refreshing");
-            let mut info = self.client_info.write().await;
-            if !self.is_expired() {
-                return Ok(());
-            }
-            let token = self
-                .auth
-                .login_with_refresh_token(&info.refresh_token, Some(&info.client_secret))
-                .await?;
-            let access_token = token.access_token;
-            let refresh_token = token.refresh_token.expect("Fail to get refresh token");
-            let expire = Duration::from_secs(token.expires_in_secs) + now();
-
-            let drive =
-                OneDrive::new_with_client(self.client.clone(), access_token, info.location.clone());
-            *self.drive.write().await = drive;
-
-            self.set_expire(expire.as_secs());
-            info.refresh_token = refresh_token;
+            self.refresh().await?;
         }
 
         Ok(())
@@ -128,6 +138,7 @@ impl OneDriveClient {
         &self,
         item: ItemLocation<'_>,
     ) -> Result<Vec<DriveItem>, onedrive_api::Error> {
+        #[cfg(feature = "auto-refresh")]
         self.refresh_if_expired().await?;
         self.drive.read().await.list_children(item).await
     }
@@ -136,11 +147,13 @@ impl OneDriveClient {
         &self,
         item: ItemLocation<'_>,
     ) -> Result<String, onedrive_api::Error> {
+        #[cfg(feature = "auto-refresh")]
         self.refresh_if_expired().await?;
         self.drive.read().await.get_item_download_url(item).await
     }
 
     pub async fn get_item(&self, item: ItemLocation<'_>) -> Result<DriveItem, onedrive_api::Error> {
+        #[cfg(feature = "auto-refresh")]
         self.refresh_if_expired().await?;
         self.drive.read().await.get_item(item).await
     }
@@ -211,11 +224,7 @@ impl OneDriveProvider {
 #[async_trait::async_trait]
 impl AnniProvider for OneDriveProvider {
     async fn albums(&self) -> anni_provider::Result<HashSet<Cow<str>>> {
-        Ok(self
-            .albums
-            .keys()
-            .map(Into::into)
-            .collect())
+        Ok(self.albums.keys().map(Into::into).collect())
     }
 
     async fn get_audio(
