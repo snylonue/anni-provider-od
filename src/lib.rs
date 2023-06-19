@@ -161,7 +161,7 @@ impl OneDriveClient {
 
 #[derive(Debug)]
 pub struct OneDriveProvider {
-    drive: OneDriveClient,
+    pub drive: OneDriveClient,
     client: Client,
     albums: HashMap<String, String>, // album_id => (path (without prefix '/'), size)
 }
