@@ -94,7 +94,7 @@ impl OneDriveClient {
         self.expire.store(val, std::sync::atomic::Ordering::Release)
     }
 
-    fn is_expired(&self) -> bool {
+    pub fn is_expired(&self) -> bool {
         now().as_secs() > self.expire()
     }
 
