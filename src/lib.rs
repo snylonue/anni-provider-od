@@ -13,6 +13,7 @@ use reqwest::{
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    fmt::Display,
     num::NonZeroU8,
     sync::atomic::AtomicU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -313,6 +314,17 @@ impl From<Error> for ProviderError {
         }
     }
 }
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProviderError(e) => write!(f, "{e}"),
+            Self::OneDriveError(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 fn content_range_to_range(content_range: Option<&str>) -> Range {
     match content_range {
