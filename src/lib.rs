@@ -176,11 +176,13 @@ impl OneDriveProvider {
             albums: HashMap::new(),
         }
     }
+
     pub async fn new(drive: OneDriveClient) -> Result<Self, Error> {
         let mut p = Self::with_drive(drive);
         p.reload_albums().await?;
         Ok(p)
     }
+
     pub async fn reload_albums(&mut self) -> Result<(), Error> {
         let items = self.drive.list_children(ItemLocation::root()).await?;
         let albums = items
@@ -201,6 +203,8 @@ impl OneDriveProvider {
         self.albums = albums;
         Ok(())
     }
+
+    /// Returns an onedrive download url of requested path and its size
     pub async fn file_url(&self, path: &str) -> Result<(String, usize), Error> {
         let location = ItemLocation::from_path(path).ok_or(ProviderError::InvalidPath)?;
         let item = self.drive.get_item(location).await?;
@@ -208,6 +212,8 @@ impl OneDriveProvider {
         let size = item.size.unwrap_or_default();
         Ok((download_url, size as usize))
     }
+
+    /// Returns an onedrive download url of requested audio and its size.
     pub async fn audio_url(
         &self,
         album_id: &str,
@@ -219,6 +225,19 @@ impl OneDriveProvider {
             None => return Err(ProviderError::FileNotFound.into()),
         };
         self.file_url(&path).await
+    }
+
+    /// Returns an onedrive download url of requested cover.
+    pub async fn cover_url(
+        &self,
+        album_id: &str,
+        disc_id: Option<NonZeroU8>,
+    ) -> Result<String, Error> {
+        let path = match self.albums.get(album_id) {
+            Some(p) => format_cover_path(&p, album_id, disc_id),
+            None => return Err(ProviderError::FileNotFound.into()),
+        };
+        self.file_url(&path).await.map(|(url, _)| url)
     }
 }
 
@@ -272,11 +291,7 @@ impl AnniProvider for OneDriveProvider {
         album_id: &str,
         disc_id: Option<NonZeroU8>,
     ) -> anni_provider::Result<ResourceReader> {
-        let path = match self.albums.get(album_id) {
-            Some(p) => format_cover_path(&p, album_id, disc_id),
-            None => return Err(ProviderError::FileNotFound),
-        };
-        let (url, _) = self.file_url(&path).await?;
+        let url = self.cover_url(album_id, disc_id).await?;
         let resp = self.client.get(url).send().await?;
         let reader = StreamReader::new(resp.bytes_stream().map(to_io_error));
         Ok(Box::pin(reader))
