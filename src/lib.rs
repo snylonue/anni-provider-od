@@ -223,7 +223,7 @@ impl OneDriveProvider {
         track_id: NonZeroU8,
     ) -> Result<(String, usize), Error> {
         let path = match self.albums.get(album_id) {
-            Some(p) => format_audio_path(&p, album_id, disc_id, track_id),
+            Some(p) => format_audio_path(p, album_id, disc_id, track_id),
             None => return Err(ProviderError::FileNotFound.into()),
         };
         self.file_url(&path).await
@@ -236,7 +236,7 @@ impl OneDriveProvider {
         disc_id: Option<NonZeroU8>,
     ) -> Result<String, Error> {
         let path = match self.albums.get(album_id) {
-            Some(p) => format_cover_path(&p, album_id, disc_id),
+            Some(p) => format_cover_path(p, album_id, disc_id),
             None => return Err(ProviderError::FileNotFound.into()),
         };
         self.file_url(&path).await.map(|(url, _)| url)
