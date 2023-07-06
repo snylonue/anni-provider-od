@@ -189,6 +189,7 @@ impl OneDriveProvider {
             .into_iter()
             .filter_map(|item| match item.name.clone() {
                 Some(name) if name.len() == 36 => Some((
+                    // check if name is a uuid
                     name,
                     item.parent_reference?["path"]
                         .as_str()?
@@ -198,9 +199,10 @@ impl OneDriveProvider {
                         .collect(),
                 )),
                 _ => None,
-            })
-            .collect();
-        self.albums = albums;
+            });
+
+        self.albums.clear();
+        self.albums.extend(albums);
         Ok(())
     }
 
