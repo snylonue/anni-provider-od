@@ -163,43 +163,55 @@ impl OneDriveClient {
 #[derive(Debug)]
 pub struct OneDriveProvider {
     pub drive: OneDriveClient,
+    pub layers: usize,
+    pub path: String,
     client: Client,
-    albums: HashMap<String, String>, // album_id => (path (without prefix '/'), size)
+    albums: HashMap<String, String>, // album_id => path without prefix '/'
 }
 
 impl OneDriveProvider {
-    pub fn with_drive(drive: OneDriveClient) -> Self {
+    /// `path` should be the root of an [Anni strict directory](https://book.anni.rs/01.audio-convention/09.directory-strict.html).
+    ///
+    /// **Currently only `layers == 0` is supported.**
+    ///
+    /// Panics if layers > 4. See [Anni audio convention](https://book.anni.rs/01.audio-convention/09.directory-strict.html)
+    pub fn with_drive(drive: OneDriveClient, path: String, layers: usize) -> Self {
+        assert!(layers <= 4);
         let client = drive.client();
         Self {
             drive,
+            layers,
+            path,
             client,
             albums: HashMap::new(),
         }
     }
 
-    pub async fn new(drive: OneDriveClient) -> Result<Self, Error> {
-        let mut p = Self::with_drive(drive);
+    /// `path` should be the root of an [Anni strict directory](https://book.anni.rs/01.audio-convention/09.directory-strict.html).
+    ///
+    /// Panics if layers > 4. See [Anni audio convention](https://book.anni.rs/01.audio-convention/09.directory-strict.html)
+    pub async fn new(drive: OneDriveClient, path: String, layers: usize) -> Result<Self, Error> {
+        let mut p = Self::with_drive(drive, path, layers);
         p.reload_albums().await?;
         Ok(p)
     }
 
     pub async fn reload_albums(&mut self) -> Result<(), Error> {
-        let items = self.drive.list_children(ItemLocation::root()).await?;
-        let albums = items
-            .into_iter()
-            .filter_map(|item| match item.name.clone() {
-                Some(name) if name.len() == 36 => Some((
-                    // check if name is a uuid
-                    name,
-                    item.parent_reference?["path"]
-                        .as_str()?
-                        .split('/')
-                        .skip_while(|c| *c != "root:")
-                        .skip(1)
-                        .collect(),
-                )),
-                _ => None,
-            });
+        let items = self
+            .drive
+            .list_children(ItemLocation::from_path(&self.path).unwrap())
+            .await?;
+        let albums = items.into_iter().filter_map(|item| {
+            Some((
+                item.name.clone()?,
+                item.parent_reference?["path"]
+                    .as_str()?
+                    .split('/')
+                    .skip_while(|c| *c != "root:")
+                    .skip(1)
+                    .collect(), // get parent path
+            ))
+        });
 
         self.albums.clear();
         self.albums.extend(albums);
