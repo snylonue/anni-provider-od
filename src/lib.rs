@@ -199,7 +199,7 @@ impl OneDriveProvider {
     pub async fn reload_albums(&mut self) -> Result<(), Error> {
         let items = self
             .drive
-            .list_children(ItemLocation::from_path(&self.path).unwrap())
+            .list_children(ItemLocation::from_path(&self.path).ok_or(ProviderError::InvalidPath)?)
             .await?;
         let albums = items.into_iter().filter_map(|item| {
             Some((
