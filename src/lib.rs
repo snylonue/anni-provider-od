@@ -165,6 +165,7 @@ pub struct OneDriveProvider {
     pub drive: OneDriveClient,
     pub layers: usize,
     pub path: String,
+    pub extension: String,
     client: Client,
     albums: HashMap<String, String>, // album_id => path without prefix '/'
 }
@@ -182,6 +183,7 @@ impl OneDriveProvider {
             drive,
             layers,
             path,
+            extension: String::from("flac"),
             client,
             albums: HashMap::new(),
         }
@@ -235,7 +237,7 @@ impl OneDriveProvider {
         track_id: NonZeroU8,
     ) -> Result<(String, usize), Error> {
         let path = match self.albums.get(album_id) {
-            Some(p) => format_audio_path(p, album_id, disc_id, track_id),
+            Some(p) => format_audio_path(p, album_id, disc_id, track_id, &self.extension),
             None => return Err(ProviderError::FileNotFound.into()),
         };
         self.file_url(&path).await
@@ -258,6 +260,7 @@ impl OneDriveProvider {
 #[async_trait::async_trait]
 impl AnniProvider for OneDriveProvider {
     async fn albums(&self) -> anni_provider::Result<HashSet<Cow<str>>> {
+        log::debug!("getting albums");
         Ok(self.albums.keys().map(Into::into).collect())
     }
 
@@ -290,7 +293,7 @@ impl AnniProvider for OneDriveProvider {
         let (duration, reader) = info::read_duration(Box::pin(reader), range).await?;
         Ok(AudioResourceReader {
             info: AudioInfo {
-                extension: String::from("flac"),
+                extension: self.extension.clone(),
                 size,
                 duration,
             },
@@ -313,6 +316,7 @@ impl AnniProvider for OneDriveProvider {
 
     /// Reloads the provider for new albums
     async fn reload(&mut self) -> anni_provider::Result<()> {
+        log::debug!("reloading albums");
         self.reload_albums().await.map_err(Into::into)
     }
 }
@@ -392,11 +396,12 @@ fn format_audio_path(
     album_id: &str,
     disc_id: NonZeroU8,
     track_id: NonZeroU8,
+    ext: &str,
 ) -> String {
     if base.is_empty() {
-        format!("/{album_id}/{disc_id}/{track_id}.flac")
+        format!("/{album_id}/{disc_id}/{track_id}.{ext}")
     } else {
-        format!("/{base}/{album_id}/{disc_id}/{track_id}.flac")
+        format!("/{base}/{album_id}/{disc_id}/{track_id}.{ext}")
     }
 }
 
