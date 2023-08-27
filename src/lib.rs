@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     num::NonZeroU8,
-    sync::atomic::AtomicU64,
+    sync::{atomic::AtomicU64, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::RwLock;
@@ -162,7 +162,7 @@ impl OneDriveClient {
 
 #[derive(Debug)]
 pub struct OneDriveProvider {
-    pub drive: OneDriveClient,
+    pub drive: Arc<OneDriveClient>,
     pub layers: usize,
     pub path: String,
     pub extension: String,
@@ -176,7 +176,7 @@ impl OneDriveProvider {
     /// **Currently only `layers == 0` is supported.**
     ///
     /// Panics if layers > 4. See [Anni audio convention](https://book.anni.rs/01.audio-convention/09.directory-strict.html)
-    pub fn with_drive(drive: OneDriveClient, path: String, layers: usize) -> Self {
+    pub fn with_drive(drive: Arc<OneDriveClient>, path: String, layers: usize) -> Self {
         assert!(layers <= 4);
         let client = drive.client();
         Self {
@@ -192,7 +192,11 @@ impl OneDriveProvider {
     /// `path` should be the root of an [Anni strict directory](https://book.anni.rs/01.audio-convention/09.directory-strict.html).
     ///
     /// Panics if layers > 4. See [Anni audio convention](https://book.anni.rs/01.audio-convention/09.directory-strict.html)
-    pub async fn new(drive: OneDriveClient, path: String, layers: usize) -> Result<Self, Error> {
+    pub async fn new(
+        drive: Arc<OneDriveClient>,
+        path: String,
+        layers: usize,
+    ) -> Result<Self, Error> {
         let mut p = Self::with_drive(drive, path, layers);
         p.reload_albums().await?;
         Ok(p)
