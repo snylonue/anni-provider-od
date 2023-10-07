@@ -1,15 +1,9 @@
 pub mod info;
+pub mod mp3;
 
 pub use anni_provider::{AnniProvider, ProviderError};
 pub use onedrive_api;
 
-use anni_provider::{AudioInfo, AudioResourceReader, Range, ResourceReader};
-use onedrive_api::{resource::DriveItem, Auth, DriveLocation, ItemLocation, OneDrive, Permission};
-use reqwest::{
-    header::{CONTENT_RANGE, RANGE},
-    redirect::Policy,
-    Client, ClientBuilder,
-};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -17,6 +11,18 @@ use std::{
     num::NonZeroU8,
     sync::{atomic::AtomicU64, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anni_provider::{AudioInfo, AudioResourceReader, Range, ResourceReader};
+use onedrive_api::{
+    option::ObjectOption,
+    resource::{DriveItem, DriveItemField},
+    Auth, DriveLocation, ItemLocation, OneDrive, Permission,
+};
+use reqwest::{
+    header::{CONTENT_RANGE, RANGE},
+    redirect::Policy,
+    Client, ClientBuilder,
 };
 use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
@@ -153,10 +159,20 @@ impl OneDriveClient {
         self.drive.read().await.get_item_download_url(item).await
     }
 
-    pub async fn get_item(&self, item: ItemLocation<'_>) -> Result<DriveItem, onedrive_api::Error> {
+    pub async fn get_item(
+        &self,
+        item: ItemLocation<'_>,
+        option: ObjectOption<DriveItemField>,
+    ) -> Result<DriveItem, onedrive_api::Error> {
         #[cfg(feature = "auto-refresh")]
         self.refresh_if_expired().await?;
-        self.drive.read().await.get_item(item).await
+        self.drive
+            .read()
+            .await
+            .get_item_with_option(item, option)
+            .await
+            .transpose()
+            .unwrap()
     }
 }
 
@@ -165,7 +181,7 @@ pub struct OneDriveProvider {
     pub drive: Arc<OneDriveClient>,
     pub layers: usize,
     pub path: String,
-    pub extension: String,
+    pub(crate) extension: String,
     client: Client,
     albums: HashMap<String, String>, // album_id => path without prefix '/'
 }
@@ -227,7 +243,7 @@ impl OneDriveProvider {
     /// Returns an onedrive download url of requested path and its size
     pub async fn file_url(&self, path: &str) -> Result<(String, usize), Error> {
         let location = ItemLocation::from_path(path).ok_or(ProviderError::InvalidPath)?;
-        let item = self.drive.get_item(location).await?;
+        let item = self.drive.get_item(location, Default::default()).await?;
         let download_url = item.download_url.ok_or(ProviderError::FileNotFound)?;
         let size = item.size.unwrap_or_default();
         Ok((download_url, size as usize))
